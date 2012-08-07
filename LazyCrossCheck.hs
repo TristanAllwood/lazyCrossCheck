@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE KindSignatures #-}
@@ -15,8 +16,9 @@ module LazyCrossCheck
 , with
 ) where
 
-import Data.Typeable
+import Control.Exception
 import Data.Data
+import Data.Typeable
 
 import LazyCrossCheck.Result
 import LazyCrossCheck.Primitives
@@ -31,18 +33,37 @@ lazyCrossCheck2 :: LCCSpec Two -> IO ()
 lazyCrossCheck2 = lcc
 
 (-->) :: CrossCheck (AddResult a n) => a -> a -> LCCSpec n
-(-->) = error $ "TODO: -->"
+l --> r = LCCSpec l r []
 
 with :: LCCSpec n -> [ Primitives ] -> LCCSpec n
-with = error $ "TODO: with"
+with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
 
-data LCCSpec n = LCCSpec
+data Path = Path [Int]
+  deriving (Show, Typeable)
+
+instance Exception Path where
+
+data LCCSpec n where
+  LCCSpec :: CrossCheck (AddResult a n) => a -> a -> [ Primitives ] -> LCCSpec n
+
+data Arg a
+  = Arg { value   :: a
+        , rep     :: String
+        , refine  :: Path -> [Arg a]
+        }
 
 class Argument a where
+  initial :: [Primitives] -> Arg a
+
 class CrossCheck a where
 
-instance (Typeable a, Show a) => Argument a
-
 instance (Argument a, CrossCheck b) => CrossCheck (a -> b)
-
 instance (Eq a, Show a) => CrossCheck (Result a)
+
+instance (Argument a) => Argument (Maybe a) where
+  initial = argumentData
+
+instance Argument Int where
+  initial = usePrimitive
+
+argumentData ::

@@ -13,4 +13,3 @@ data Primitives where
 
 (==>) :: Typeable a => Proxy a -> [a] -> Primitives
 _ ==> xs = Primitives xs
-

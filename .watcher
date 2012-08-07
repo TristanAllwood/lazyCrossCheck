@@ -1,0 +1,2 @@
+*.hs LazyCrossCheck/*.hs:
+  screen -S test -X stuff ':r\ntest\n'
