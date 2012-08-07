@@ -23,8 +23,12 @@ import Data.Typeable
 import LazyCrossCheck.Result
 import LazyCrossCheck.Primitives
 
+data LCCSpec n where
+  LCCSpec :: CrossCheck (AddResult a n) => a -> a -> [ Primitives ] -> LCCSpec n
+
 lcc :: LCCSpec n -> IO ()
-lcc _ = error "TODO: lcc"
+lcc (LCCSpec l r ps) = do
+  putStrLn "lcc"
 
 lazyCrossCheck :: LCCSpec One -> IO ()
 lazyCrossCheck = lcc
@@ -43,9 +47,6 @@ data Path = Path [Int]
 
 instance Exception Path where
 
-data LCCSpec n where
-  LCCSpec :: CrossCheck (AddResult a n) => a -> a -> [ Primitives ] -> LCCSpec n
-
 data Arg a
   = Arg { value   :: a
         , rep     :: String
@@ -60,10 +61,20 @@ class CrossCheck a where
 instance (Argument a, CrossCheck b) => CrossCheck (a -> b)
 instance (Eq a, Show a) => CrossCheck (Result a)
 
-instance (Argument a) => Argument (Maybe a) where
-  initial = argumentData
+instance (Data a, Typeable a, Show a) => Argument a where
+  initial primitives = Arg { value  = throw (Path [])
+                           , rep    = "?"
+                           , refine = urk primitives undefined
+                           }
 
-instance Argument Int where
-  initial = usePrimitive
 
-argumentData ::
+
+urk :: (Data a, Typeable a, Show a) => [Primitives] -> a -> Path -> [Arg a]
+urk ps _ (Path [])
+  | Just vs <- findPrimitives ps (undefined :: Proxy a)
+  = let mkArg a = Arg { value = a
+                      , rep = show a
+                      , refine = error "Cannot refine a primitive"
+                      }
+    in  map mkArg vs
+  | otherwise = error "TODO: urk"
