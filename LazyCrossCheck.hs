@@ -1,3 +1,4 @@
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
@@ -40,44 +41,26 @@ import LazyCrossCheck.Primitives
 data LCCSpec n where
   LCCSpec :: CrossCheck a => a -> a -> [ Primitives ] -> LCCSpec n
 
+defaultDepth = 10
+
 lcc :: LCCSpec n -> IO ()
 lcc (LCCSpec act exp ps) = do
-  let actE = initialExp act
-      expE = initialExp exp
+  let expectedExp = initialExp exp
+  outputs <- explore defaultDepth ps expectedExp
+  forM_ outputs $ \(exp, res) -> do
+    putStrLn $ ("expected ") ++ (show $ arguments exp) ++ " ==> " ++ (show res)
 
-  expR <- eval expE
+explore :: Int -> [Primitives] -> Exp -> IO [(Exp, EvalResult)]
+explore depth primitives exp
+  | depth <= 0 = return []
+  | otherwise  = do
+  res <- eval exp
 
-  case expR of
-    (EvalSuccess expS)   -> do
-      putStrLn "evaluate actual, and see where we go."
-      actR <- eval actE
-      case actR of
-        (EvalSuccess actS) -> if expS == actS
-                                then putStrLn "Same!"
-                                else putStrLn "Differ!"
-        (EvalUndefined actP) -> putStrLn "Actual may be over-strict"
-                                  {- run actual to find results to see if they
-                                   - agree
-                                   -}
-        (EvalException _)    -> putStrLn "Actual may be buggy"
-
-    (EvalUndefined expP) -> do
-      putStrLn "evaluate actual, and see where we go."
-      actR <- eval actE
-      case actR of
-        (EvalSuccess actS) -> putStrLn "actual is too lazy"
-                              {- run exp to find results to see if they agree -}
-        (EvalUndefined actP) -> if expP == actP
-                                  then return ()
-                                       {- refine both and cross-compare -}
-                                  else return ()
-                                       {- diverging lines!?! -}
-        (EvalException _)    -> putStrLn "Actual may be buggy"
-
-
-    (EvalException _)    -> putStrLn "Precondition in expected: abort."
-
-
+  case res of
+    EvalUndefined path -> do
+      let nexts = refine primitives exp path
+      concat <$> mapM (explore (depth - 1) primitives) nexts
+    _ -> return [(exp, res)]
 
 lazyCrossCheck :: LCCSpec One -> IO ()
 lazyCrossCheck = lcc
@@ -107,6 +90,8 @@ data Arg
   = ArgConstr Constr [Arg]
   | ArgUndefined Path
   | forall a . (Show a, Typeable a) => ArgPrimitive a
+
+deriving instance Show Arg
 
 getSafeResult :: Show a => a -> IO EvalResult
 getSafeResult x = (do
@@ -152,10 +137,7 @@ eval exp = do
     ) `catch` (\(e :: SomeException) -> putMVar var $ EvalException (show e))
 
   mRes <- getProcessStatus True False child_pid
-  putStrLn "parent carried on"
-
   res <- takeMVar var
-  print res
   return res
 
 
