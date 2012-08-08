@@ -1,3 +1,6 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE EmptyDataDecls #-}
@@ -16,19 +19,65 @@ module LazyCrossCheck
 , with
 ) where
 
+import Control.Applicative
+import Control.Concurrent
+import Control.Concurrent.MVar
 import Control.Exception
+import Control.Monad.State
 import Data.Data
+import Data.List
+import Data.Maybe
 import Data.Typeable
+import Prelude hiding (catch)
+import System.Exit
+import System.IO
+import System.Posix.IO
+import System.Posix.Process
 
 import LazyCrossCheck.Result
 import LazyCrossCheck.Primitives
 
 data LCCSpec n where
-  LCCSpec :: CrossCheck (AddResult a n) => a -> a -> [ Primitives ] -> LCCSpec n
+  LCCSpec :: CrossCheck a => a -> a -> [ Primitives ] -> LCCSpec n
 
 lcc :: LCCSpec n -> IO ()
-lcc (LCCSpec l r ps) = do
-  putStrLn "lcc"
+lcc (LCCSpec act exp ps) = do
+  let actE = initialExp act
+      expE = initialExp exp
+
+  expR <- eval expE
+
+  case expR of
+    (EvalSuccess expS)   -> do
+      putStrLn "evaluate actual, and see where we go."
+      actR <- eval actE
+      case actR of
+        (EvalSuccess actS) -> if expS == actS
+                                then putStrLn "Same!"
+                                else putStrLn "Differ!"
+        (EvalUndefined actP) -> putStrLn "Actual may be over-strict"
+                                  {- run actual to find results to see if they
+                                   - agree
+                                   -}
+        (EvalException _)    -> putStrLn "Actual may be buggy"
+
+    (EvalUndefined expP) -> do
+      putStrLn "evaluate actual, and see where we go."
+      actR <- eval actE
+      case actR of
+        (EvalSuccess actS) -> putStrLn "actual is too lazy"
+                              {- run exp to find results to see if they agree -}
+        (EvalUndefined actP) -> if expP == actP
+                                  then return ()
+                                       {- refine both and cross-compare -}
+                                  else return ()
+                                       {- diverging lines!?! -}
+        (EvalException _)    -> putStrLn "Actual may be buggy"
+
+
+    (EvalException _)    -> putStrLn "Precondition in expected: abort."
+
+
 
 lazyCrossCheck :: LCCSpec One -> IO ()
 lazyCrossCheck = lcc
@@ -36,45 +85,115 @@ lazyCrossCheck = lcc
 lazyCrossCheck2 :: LCCSpec Two -> IO ()
 lazyCrossCheck2 = lcc
 
-(-->) :: CrossCheck (AddResult a n) => a -> a -> LCCSpec n
-l --> r = LCCSpec l r []
+(-->) :: forall a n . (CrossCheck (AddResult a n), Resultify a n) =>
+         a -> a -> LCCSpec n
+l --> r = LCCSpec (addResult l (undefined :: n)) (addResult r (undefined :: n)) []
 
 with :: LCCSpec n -> [ Primitives ] -> LCCSpec n
 with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
 
-data Path = Path [Int]
-  deriving (Show, Typeable)
+newtype Path = Path [Int]
+  deriving (Eq, Read, Show, Typeable)
 
 instance Exception Path where
 
-data Arg a
-  = Arg { value   :: a
-        , rep     :: String
-        , refine  :: Path -> [Arg a]
+data Exp
+  = forall a . CrossCheck a =>
+    Exp { root      :: CrossCheck a => a
+        , arguments :: [Arg]
         }
 
-class Argument a where
-  initial :: [Primitives] -> Arg a
+data Arg
+  = ArgConstr Constr [Arg]
+  | ArgUndefined Path
+  | forall a . (Show a, Typeable a) => ArgPrimitive a
 
-class CrossCheck a where
+getSafeResult :: Show a => a -> IO EvalResult
+getSafeResult x = (do
+  let str = show x
+  () <- evaluate $ foldl' (flip seq) () str
+  return $ EvalSuccess str
+  ) `catches` [ Handler $ \(p :: Path) -> return $ EvalUndefined p
+              , Handler $ \(e :: SomeException) -> return $ EvalException (show e) {- TODO safety of show e-}
+              ]
 
-instance (Argument a, CrossCheck b) => CrossCheck (a -> b)
-instance (Eq a, Show a) => CrossCheck (Result a)
+data EvalResult
+  = EvalSuccess String
+  | EvalUndefined Path
+  | EvalException String
+  deriving (Read, Show)
 
-instance (Data a, Typeable a, Show a) => Argument a where
-  initial primitives = Arg { value  = throw (Path [])
-                           , rep    = "?"
-                           , refine = urk primitives undefined
-                           }
+(=~=) :: EvalResult -> EvalResult -> Bool
+(EvalSuccess s1)   =~= (EvalSuccess s2)   = s1 == s2
+(EvalUndefined p1) =~= (EvalUndefined p2) = p1 == p2
+(EvalException _)  =~= (EvalException _)  = True
+_ =~= _ = False
+
+eval :: Exp -> IO EvalResult
+eval exp = do
+  (parent, child) <- createPipe
+  child_pid <- forkProcess $ do
+    child_h <- fdToHandle child
+    safeRes <- case exp of
+                Exp root arguments -> getSafeResult (apply root arguments)
+    hPrint child_h safeRes
+    hFlush child_h
+
+  child_h <- fdToHandle child
+  hClose child_h
+
+  var <- newEmptyMVar
+
+  {- TODO: add timeouts -}
+
+  forkIO $ (do
+    parent_h <- fdToHandle parent
+    putMVar var =<< read <$> hGetContents parent_h
+    ) `catch` (\(e :: SomeException) -> putMVar var $ EvalException (show e))
+
+  mRes <- getProcessStatus True False child_pid
+  putStrLn "parent carried on"
+
+  res <- takeMVar var
+  print res
+  return res
 
 
+refine :: [Primitives] -> Exp -> Path -> [Exp]
+refine = error "TODO: refine"
 
-urk :: (Data a, Typeable a, Show a) => [Primitives] -> a -> Path -> [Arg a]
-urk ps _ (Path [])
-  | Just vs <- findPrimitives ps (undefined :: Proxy a)
-  = let mkArg a = Arg { value = a
-                      , rep = show a
-                      , refine = error "Cannot refine a primitive"
-                      }
-    in  map mkArg vs
-  | otherwise = error "TODO: urk"
+evalArg :: (Data a, Typeable a) => Arg -> a
+evalArg (ArgConstr c as)    = flip evalState as $ do
+  fromConstrM (evalArg <$> next) c
+  where
+    next = state (\(x:xs) -> (x, xs))
+evalArg (ArgUndefined path) = throw path
+evalArg (ArgPrimitive prim) = fromMaybe (error "evalArg Prim cast") $ cast prim
+
+applyArg :: (Typeable a, Data a) => (a -> b) -> Arg -> b
+applyArg f arg = let a = evalArg arg in f a
+
+initialExp :: CrossCheck a => a -> Exp
+initialExp f = Exp { root = f
+                   , arguments = [ ArgUndefined (Path [i]) |
+                                    i <- [0 .. argCount f - 1]]
+                   }
+
+class (Eq (Res a), Show (Res a), Typeable (Res a)) => CrossCheck a where
+  type Res a
+  argCount :: a -> Int
+
+  apply :: a -> [Arg] -> Res a
+
+instance (Typeable a, Data a, CrossCheck b) => CrossCheck (a -> b) where
+  type Res (a -> b) = Res b
+  argCount (_ :: a -> b) = 1 + argCount (undefined :: b)
+  apply f (a:as) = (f `applyArg` a) `apply` as
+
+instance (Eq a, Typeable a, Show a) => CrossCheck (Result a) where
+  type Res (Result a) = a
+
+  argCount _ = 0
+
+  apply (Result x) [] = x
+

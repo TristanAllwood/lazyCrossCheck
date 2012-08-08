@@ -1,4 +1,4 @@
 *.hs LazyCrossCheck/*.hs:
   date
   echo Reloading
-  screen -S test -X stuff ':r\ntest\n'
+  screen -S test -X stuff ' runghc Tester.hs\n'
