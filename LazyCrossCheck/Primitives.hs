@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 module LazyCrossCheck.Primitives where
@@ -11,19 +12,15 @@ ints :: Proxy Int
 ints = undefined
 
 data Primitives where
-  Primitives :: Typeable a => [a] -> Primitives
+  Primitives :: (Show a, Typeable a) => [a] -> Primitives
 
-(==>) :: Typeable a => Proxy a -> [a] -> Primitives
+(==>) :: (Show a, Typeable a) => Proxy a -> [a] -> Primitives
 _ ==> xs = Primitives xs
 
-findPrimitives :: forall a . Typeable a => [Primitives] -> Proxy a -> Maybe [a]
-findPrimitives ps _
-  | null possibles = Nothing
-  | otherwise      = Just (concat possibles)
+findPrimitives :: [Primitives] -> TypeRep
+               -> (forall a . (Show a, Typeable a) => a -> b) -> [b]
+findPrimitives ps rep f = concatMap extract ps
   where
-    possibles = mapMaybe extract ps
-
     extract (Primitives (xs :: [b]))
-      | typeOf (undefined :: b) == typeOf (undefined :: a)
-      = Just $ mapMaybe cast xs
-      | otherwise = Nothing
+      | typeOf (undefined :: b) == rep = map f xs
+      | otherwise = []

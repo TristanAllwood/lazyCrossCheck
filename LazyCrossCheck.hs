@@ -75,7 +75,7 @@ l --> r = LCCSpec (addResult l (undefined :: n)) (addResult r (undefined :: n)) 
 with :: LCCSpec n -> [ Primitives ] -> LCCSpec n
 with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
 
-newtype Path = Path [Int]
+data Path = Path [Int]
   deriving (Eq, Read, Show, Typeable)
 
 instance Exception Path where
@@ -140,9 +140,13 @@ eval exp = do
   res <- takeMVar var
   return res
 
-
 refine :: [Primitives] -> Exp -> Path -> [Exp]
-refine = error "TODO: refine"
+refine primitives (Exp root args) path
+  = [ Exp root args' | args' <- refine' args path undefined]
+  where
+    refine' :: [Arg] -> Path -> TypeRep -> [[Arg]]
+    refine' []   (Path [])     currentType = undefined
+    refine' args (Path (x:xs)) currentType = undefined
 
 evalArg :: (Data a, Typeable a) => Arg -> a
 evalArg (ArgConstr c as)    = flip evalState as $ do
@@ -165,16 +169,20 @@ class (Eq (Res a), Show (Res a), Typeable (Res a)) => CrossCheck a where
   type Res a
   argCount :: a -> Int
 
+  argReps :: a -> [TypeRep]
+
   apply :: a -> [Arg] -> Res a
 
 instance (Typeable a, Data a, CrossCheck b) => CrossCheck (a -> b) where
   type Res (a -> b) = Res b
   argCount (_ :: a -> b) = 1 + argCount (undefined :: b)
+  argReps (_ :: a -> b) = typeOf (undefined :: a) : argReps (undefined :: b)
   apply f (a:as) = (f `applyArg` a) `apply` as
 
 instance (Eq a, Typeable a, Show a) => CrossCheck (Result a) where
   type Res (Result a) = a
 
+  argReps _ = []
   argCount _ = 0
 
   apply (Result x) [] = x
