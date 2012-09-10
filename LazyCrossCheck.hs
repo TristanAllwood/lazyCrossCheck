@@ -142,11 +142,16 @@ eval exp = do
 
 refine :: [Primitives] -> Exp -> Path -> [Exp]
 refine primitives (Exp root args) path
-  = [ Exp root args' | args' <- refine' args path undefined]
+  = [ Exp root args' | args' <- refine' args (argReps root) path]
   where
-    refine' :: [Arg] -> Path -> TypeRep -> [[Arg]]
-    refine' []   (Path [])     currentType = undefined
-    refine' args (Path (x:xs)) currentType = undefined
+    refine' :: [Arg] -> [TypeRep] -> Path -> [[Arg]]
+    refine' []   []    (Path [])     = error "Refine1"
+    refine' args types (Path (x:xs)) = error "Refine2"
+
+    refineOne :: Arg -> TypeRep -> Path -> [Arg]
+    refineOne (ArgConstr ctr args)  rep (Path _) = error "RefoneOne 1"
+    refineOne (ArgUndefined _)      rep (Path _) = error "RefoneOne 2"
+    refineOne (ArgPrimitive _)      rep _       = error "RefoneOne 3"
 
 evalArg :: (Data a, Typeable a) => Arg -> a
 evalArg (ArgConstr c as)    = flip evalState as $ do
@@ -168,9 +173,7 @@ initialExp f = Exp { root = f
 class (Eq (Res a), Show (Res a), Typeable (Res a)) => CrossCheck a where
   type Res a
   argCount :: a -> Int
-
-  argReps :: a -> [TypeRep]
-
+  argReps   :: a -> [TypeRep]
   apply :: a -> [Arg] -> Res a
 
 instance (Typeable a, Data a, CrossCheck b) => CrossCheck (a -> b) where
