@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -35,13 +36,14 @@ import System.IO
 import System.Posix.IO
 import System.Posix.Process
 
+import NEList
 import LazyCrossCheck.Result
 import LazyCrossCheck.Primitives
 
 data LCCSpec n where
   LCCSpec :: CrossCheck a => a -> a -> [ Primitives ] -> LCCSpec n
 
-defaultDepth = 10
+defaultDepth = 5
 
 lcc :: LCCSpec n -> IO ()
 lcc (LCCSpec act exp ps) = do
@@ -54,6 +56,7 @@ explore :: Int -> [Primitives] -> Exp -> IO [(Exp, EvalResult)]
 explore depth primitives exp
   | depth <= 0 = return []
   | otherwise  = do
+
   res <- eval exp
 
   case res of
@@ -75,7 +78,7 @@ l --> r = LCCSpec (addResult l (undefined :: n)) (addResult r (undefined :: n)) 
 with :: LCCSpec n -> [ Primitives ] -> LCCSpec n
 with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
 
-data Path = Path [Int]
+data Path = Path (NEList Int)
   deriving (Eq, Read, Show, Typeable)
 
 instance Exception Path where
@@ -86,12 +89,19 @@ data Exp
         , arguments :: [Arg]
         }
 
+instance Show Exp where
+  show (Exp { arguments }) = show arguments
+
+
 data Arg
   = ArgConstr Constr [Arg]
-  | ArgUndefined Path
+  | forall a . (Typeable a, Data a) => ArgUndefined (Proxy a) Path
   | forall a . (Show a, Typeable a) => ArgPrimitive a
 
-deriving instance Show Arg
+instance Show Arg where
+  show (ArgConstr c as)   = unwords [show c, show as]
+  show (ArgUndefined _ p) = unwords ["?", show p]
+  show (ArgPrimitive p)   = show p
 
 getSafeResult :: Show a => a -> IO EvalResult
 getSafeResult x = (do
@@ -144,21 +154,44 @@ refine :: [Primitives] -> Exp -> Path -> [Exp]
 refine primitives (Exp root args) path
   = [ Exp root args' | args' <- refine' args (argReps root) path]
   where
-    refine' :: [Arg] -> [TypeRep] -> Path -> [[Arg]]
-    refine' []   []    (Path [])     = error "Refine1"
-    refine' args types (Path (x:xs)) = error "Refine2"
+    refine' :: [Arg] -> [(TypeRep, DataType)] -> Path -> [[Arg]]
+    refine' args types (Path (NENil p))
+      = [ preArgs ++ arg':postArgs | arg'<- newArgs]
+      where
+        (preArgs, arg:postArgs)     = splitAt p args
+        (preTypes, tipe:postTypes)  = splitAt p types
 
-    refineOne :: Arg -> TypeRep -> Path -> [Arg]
-    refineOne (ArgConstr ctr args)  rep (Path _) = error "RefoneOne 1"
-    refineOne (ArgUndefined _)      rep (Path _) = error "RefoneOne 2"
-    refineOne (ArgPrimitive _)      rep _       = error "RefoneOne 3"
+        newArgs = refineOne arg tipe
+
+        refineOne :: Arg -> (TypeRep, DataType) -> [Arg]
+        refineOne (ArgConstr ctr args)  _  = error "Refine a constructor?"
+        refineOne (ArgUndefined proxy (Path path))     rep
+          | null foundPrimitives
+          = [ ArgConstr c [ ArgUndefined proxy' $ Path (path `neSnoc` i)
+                          | (i, DataExists proxy') <- [0 .. ] `zip`
+                                                        childProxies proxy c
+                          ]
+                          | c <- dataTypeConstrs (snd rep) ]
+          | otherwise
+          = foundPrimitives
+          where
+            foundPrimitives = findPrimitives primitives (fst rep) ArgPrimitive
+        refineOne (ArgPrimitive _)      _  = error "Refine a primitive?"
+
+    refine' args types (Path (NECons x xs)) = error "Refine2"
+
+childProxies :: forall a . Data a => Proxy a -> Constr -> [DataExists]
+childProxies _ = gmapQ wrapUp . (fromConstr :: Constr -> a)
+
+wrapUp :: forall d . Data d => d -> DataExists
+wrapUp _ = DataExists (undefined :: Proxy d)
 
 evalArg :: (Data a, Typeable a) => Arg -> a
 evalArg (ArgConstr c as)    = flip evalState as $ do
   fromConstrM (evalArg <$> next) c
   where
     next = state (\(x:xs) -> (x, xs))
-evalArg (ArgUndefined path) = throw path
+evalArg (ArgUndefined _ path) = throw path
 evalArg (ArgPrimitive prim) = fromMaybe (error "evalArg Prim cast") $ cast prim
 
 applyArg :: (Typeable a, Data a) => (a -> b) -> Arg -> b
@@ -166,27 +199,32 @@ applyArg f arg = let a = evalArg arg in f a
 
 initialExp :: CrossCheck a => a -> Exp
 initialExp f = Exp { root = f
-                   , arguments = [ ArgUndefined (Path [i]) |
-                                    i <- [0 .. argCount f - 1]]
+                   , arguments = [ ArgUndefined proxy (Path (NENil i)) |
+                                    (i, DataExists proxy) <- [0 .. ] `zip`
+                                                             argDatas f
+                                    ]
                    }
 
 class (Eq (Res a), Show (Res a), Typeable (Res a)) => CrossCheck a where
   type Res a
-  argCount :: a -> Int
-  argReps   :: a -> [TypeRep]
-  apply :: a -> [Arg] -> Res a
+  argReps     :: a -> [(TypeRep, DataType)]
+  apply       :: a -> [Arg] -> Res a
+  argDatas    :: a -> [DataExists]
+
+data DataExists = forall d . Data d => DataExists (Proxy d)
 
 instance (Typeable a, Data a, CrossCheck b) => CrossCheck (a -> b) where
   type Res (a -> b) = Res b
-  argCount (_ :: a -> b) = 1 + argCount (undefined :: b)
-  argReps (_ :: a -> b) = typeOf (undefined :: a) : argReps (undefined :: b)
+  argDatas (_ :: a -> b) = DataExists (undefined :: Proxy a) :
+                            argDatas (undefined :: b)
+  argReps (_ :: a -> b) = (typeOf (undefined :: a), dataTypeOf (undefined :: a)) : argReps (undefined :: b)
   apply f (a:as) = (f `applyArg` a) `apply` as
 
 instance (Eq a, Typeable a, Show a) => CrossCheck (Result a) where
   type Res (Result a) = a
 
   argReps _ = []
-  argCount _ = 0
+  argDatas _ = []
 
   apply (Result x) [] = x
 
