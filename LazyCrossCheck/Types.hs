@@ -37,11 +37,11 @@ data ComparisonTable
   deriving Show
 
 data ComparisonRow
-  = IdenticalExp Exp EvalResult EvalResult
-  | ExpectedMoreGeneral Exp EvalResult [(Exp, EvalResult)]
-  | ActualMoreGeneral [(Exp, EvalResult)] Exp EvalResult
-  | ExpectedIsolated Exp EvalResult
-  | ActualIsolated Exp EvalResult
+  = IdenticalExp SimpleExp EvalResult EvalResult
+  | ExpectedMoreGeneral SimpleExp EvalResult [(SimpleExp, EvalResult)]
+  | ActualMoreGeneral [(SimpleExp, EvalResult)] SimpleExp EvalResult
+  | ExpectedIsolated SimpleExp EvalResult
+  | ActualIsolated SimpleExp EvalResult
   deriving Show
 
 data Related = Identical | MoreGeneral | LessGeneral | Unrelated
@@ -65,24 +65,34 @@ data Arg
   = forall a . (Typeable a, Data a) => ArgConstr (Proxy a) Constr [Arg]
   | forall a . (Typeable a, Data a) => ArgUndefined (Proxy a) Path
   | forall a . (Eq a, Show a, Typeable a) => ArgPrimitive a
+
 instance Show Exp where
   show (Exp { arguments }) = show arguments
-
-instance Format Exp where
-  format (Exp { arguments }) = hsep (map format arguments)
-
-
-instance Format Arg where
-  format (ArgConstr _ c as)
-    | length as == 0  = text $ show c
-    | otherwise       = parens $ (hsep (text (show c):map format as))
-  format (ArgUndefined _ _) = text "undefined"
-  format (ArgPrimitive p)   = text $ show p
 
 instance Show Arg where
   show (ArgConstr _ c as)   = unwords [show c, show as]
   show (ArgUndefined _ p) = unwords ["?", show p]
   show (ArgPrimitive p)   = show p
+
+
+data SimpleExp = SimpleExp String [SimpleArg]
+  deriving (Eq, Read, Show)
+
+data SimpleArg
+  = SimpleConstr String [SimpleArg]
+  | SimpleUndefined Path
+  | SimplePrimitive String
+  deriving (Eq, Read, Show)
+
+instance Format SimpleExp where
+  format (SimpleExp name args) = hsep (text name : map format args)
+
+instance Format SimpleArg where
+  format (SimpleConstr c as)
+    | length as == 0  = text c
+    | otherwise       = parens $ (hsep $ (text c):map format as)
+  format (SimpleUndefined _) = text "undefined"
+  format (SimplePrimitive p)   = text p
 
 {- module LazyCrossCheck.Eval -}
 
@@ -91,3 +101,4 @@ data EvalResult
   | EvalUndefined Path
   | EvalException String
   deriving (Read, Show)
+

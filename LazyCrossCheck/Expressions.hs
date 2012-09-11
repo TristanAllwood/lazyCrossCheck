@@ -86,3 +86,11 @@ refine primitives (Exp root args) path
                          ]
                     _ -> error "refineArgs"
 
+
+simplifyExpression :: String -> Exp -> SimpleExp
+simplifyExpression name exp = SimpleExp name (map simplifyArg (arguments exp))
+
+simplifyArg :: Arg -> SimpleArg
+simplifyArg (ArgConstr _ c args)  = SimpleConstr (show c) (map simplifyArg args)
+simplifyArg (ArgUndefined _ path) = SimpleUndefined path
+simplifyArg (ArgPrimitive p)      = SimplePrimitive (show p)

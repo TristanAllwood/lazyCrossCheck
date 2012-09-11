@@ -1,4 +1,5 @@
 *.hs LazyCrossCheck/*.hs:
   date
   echo Reloading
-  screen -S test -X stuff ' runghc -Wall -Werror -fno-warn-orphans -fno-warn-name-shadowing Tester.hs\n'
+  cabal build
+  #screen -S test -X stuff ' runghc -Wall -Werror -fno-warn-orphans -fno-warn-name-shadowing Tester.hs\n'

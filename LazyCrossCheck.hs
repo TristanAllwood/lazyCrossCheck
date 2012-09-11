@@ -28,14 +28,22 @@ lcc :: Int -> String -> LCCSpec n -> IO ()
 lcc depth name (LCCSpec exp act ps) = do
   let expectedExp = initialExp exp
   expOuts <- explore depth ps expectedExp
+  let simpleExpOuts = map (\(e,r) -> (simplifyExpression name e, r)) expOuts
 
   let actualExp = initialExp act
   actOuts <- explore depth ps actualExp
+  let simpleActOuts = map (\(e,r) -> (simplifyExpression name e, r)) actOuts
 
-  let (ComparisonTable rows) = buildComparisonTable expOuts actOuts
+  let ct = buildComparisonTable simpleExpOuts simpleActOuts
+  printCT ct
+
+printCT :: ComparisonTable -> IO ()
+printCT ct@(ComparisonTable rows) = do
+  let (passes, possible) = tableStats ct
+  putStrLn $ "Results Summary: " ++ show passes ++ " / " ++ show possible
 
   forM_ rows $ \row -> do
-    let txt = PP.renderStyle (PP.style { lineLength = 72 }) (formatRow name row)
+    let txt = PP.renderStyle (PP.style { lineLength = 72 }) (format row)
     putStrLn txt
 
 lazyCrossCheck :: Int -> String -> LCCSpec One -> IO ()

@@ -5,20 +5,52 @@ module LazyCrossCheck.ComparisonTable where
 
 import Data.List
 import Data.Maybe
-import Data.Typeable
 import Text.PrettyPrint as PP
 
 import LazyCrossCheck.Eval
 import LazyCrossCheck.Types
 
+tableStats :: ComparisonTable -> (Integer, Integer)
+tableStats (ComparisonTable rows)
+  = (passes, total)
+  where
+    passes = genericLength . filter passed $ rows
+    total  = sum . map count $ rows
 
-buildComparisonTable :: [(Exp, EvalResult)] -> [(Exp, EvalResult)]
+    passed :: ComparisonRow -> Bool
+    passed (IdenticalExp _ l r)
+      | failedPrecondition l = False
+      | otherwise            = l ~~> r
+    passed _                 = False
+
+    count :: ComparisonRow -> Integer
+    count (IdenticalExp _ l _)
+      | failedPrecondition l = 0
+      | otherwise            = 1
+
+    count (ExpectedMoreGeneral _ l _)
+      | failedPrecondition l = 0
+      | otherwise            = 1
+
+    count (ActualMoreGeneral ls _ _)
+      = genericLength . filter (not . failedPrecondition . snd) $ ls
+
+    count (ExpectedIsolated _ res)
+      | failedPrecondition res = 0
+      | otherwise              = 1
+
+    count (ActualIsolated _ _) = 0
+
+
+
+buildComparisonTable :: [(SimpleExp, EvalResult)] -> [(SimpleExp, EvalResult)]
                      -> ComparisonTable
 buildComparisonTable expected actual
   = ComparisonTable . concat $ unfoldr (uncurry oneStep) (expected, actual)
   where
-    oneStep :: [(Exp, EvalResult)] -> [(Exp, EvalResult)] ->
-               Maybe ([ComparisonRow], ([(Exp, EvalResult)],[(Exp, EvalResult)]))
+    oneStep :: [(SimpleExp, EvalResult)] -> [(SimpleExp, EvalResult)] ->
+               Maybe ([ComparisonRow], ([(SimpleExp, EvalResult)],
+                                        [(SimpleExp, EvalResult)]))
     oneStep [] []         = Nothing
     oneStep [] actuals    = let rows = map (uncurry ActualIsolated) actuals
                              in Just (rows, ([], []))
@@ -56,10 +88,12 @@ partitionRelatedness MoreGeneral  a = ([], [a], [], [])
 partitionRelatedness LessGeneral  a = ([], [], [a], [])
 partitionRelatedness Unrelated    a = ([], [], [], [a])
 
-expRelated :: Exp -> Exp -> Related
-expRelated l r = argsRelated (arguments l) (arguments r)
+expRelated :: SimpleExp -> SimpleExp -> Related
+expRelated (SimpleExp _ las) (SimpleExp _ ras)
+  | length las == length ras = argsRelated las ras
+  | otherwise                = Unrelated
   where
-    argsRelated :: [Arg] -> [Arg] -> Related
+    argsRelated :: [SimpleArg] -> [SimpleArg] -> Related
     argsRelated ls rs = foldl combineRelated Identical $
                           zipWith argRelated ls rs
 
@@ -70,66 +104,66 @@ expRelated l r = argsRelated (arguments l) (arguments r)
     combineRelated LessGeneral LessGeneral = LessGeneral
     combineRelated _ _ = Unrelated
 
-    argRelated :: Arg -> Arg -> Related
-    argRelated (ArgConstr _ cl ls) (ArgConstr _ cr rs)
+    argRelated :: SimpleArg -> SimpleArg -> Related
+    argRelated (SimpleConstr cl ls) (SimpleConstr cr rs)
       | cl == cr  = argsRelated ls rs
-    argRelated (ArgConstr _ _ _) (ArgUndefined _ _)    = LessGeneral
-    argRelated (ArgUndefined _ _) (ArgConstr _ _ _)    = MoreGeneral
-    argRelated (ArgUndefined _ _) (ArgUndefined _ _) = Identical
-    argRelated (ArgUndefined _ _) (ArgPrimitive _)   = MoreGeneral
-    argRelated (ArgPrimitive l)   (ArgPrimitive r)
-      | Just l' <- cast l
-      , l' == r                                      = Identical
-    argRelated (ArgPrimitive _)   (ArgUndefined _ _) = LessGeneral
+    argRelated (SimpleConstr _ _) (SimpleUndefined _)    = LessGeneral
+    argRelated (SimpleUndefined _) (SimpleConstr _ _)    = MoreGeneral
+    argRelated (SimpleUndefined _) (SimpleUndefined _)   = Identical
+    argRelated (SimpleUndefined _) (SimplePrimitive _)   = MoreGeneral
+    argRelated (SimplePrimitive l) (SimplePrimitive r)
+      | l == r                                           = Identical
+    argRelated (SimplePrimitive _)   (SimpleUndefined _) = LessGeneral
     argRelated _ _ = Unrelated
 
-formatRow :: String -> ComparisonRow -> Doc
-formatRow name (IdenticalExp e l r)
-  | l ~~> r   = PP.empty
-  | otherwise = vcat [ text name <+> format e <> ": results differ."
-                     , nest 2 $ vcat [ "model answer ="   <+> format l
-                                     , "student answer =" <+> format r
-                                     ]
-                     ]
-formatRow name (ExpectedMoreGeneral e l rs)
-  | failedPrecondition l = PP.empty
-  | otherwise
-  = vcat [ text name <+> format e <> ": model answer is more general."
-         , nest 2 $ vcat [ "model answer =" <+> format l
-                         , "student answers:"
-                         , nest 1 kids
-                         ]
-       ]
-  where
-    kids = vcat (map formatRow' rs)
-    formatRow' (e', r) = text name <+> format e' <+> "=" <+> format r
+instance Format ComparisonRow where
 
-formatRow name (ActualMoreGeneral ls e r)
-  | null actualLines = PP.empty
-  | otherwise
-  = vcat [ text name <+> format e <> ": student's answer is more general."
-         , nest 2 $ vcat [ "student answer =" <+> format r
-                         , "model answers:"
-                         , nest 1 kids
-                         ]
+  format (IdenticalExp e l r)
+    | l ~~> r   = PP.empty
+    | otherwise = vcat [ format e <> ": results differ."
+                       , nest 2 $ vcat [ "model answer ="   <+> format l
+                                       , "student answer =" <+> format r
+                                       ]
+                       ]
+  format (ExpectedMoreGeneral e l rs)
+    | failedPrecondition l = PP.empty
+    | otherwise
+    = vcat [ format e <> ": model answer is more general."
+           , nest 2 $ vcat [ "model answer =" <+> format l
+                           , "student answers:"
+                           , nest 1 kids
+                           ]
          ]
-  where
-    actualLines = mapMaybe mkLine ls
+    where
+      kids = vcat (map format' rs)
+      format' (e', r) = format e' <+> "=" <+> format r
 
-    kids = vcat actualLines
+  format (ActualMoreGeneral ls e r)
+    | null actualLines = PP.empty
+    | otherwise
+    = vcat [ format e <> ": student's answer is more general."
+           , nest 2 $ vcat [ "student answer =" <+> format r
+                           , "model answers:"
+                           , nest 1 kids
+                           ]
+           ]
+    where
+      actualLines = mapMaybe mkLine ls
 
-    mkLine (el, l)
-      | failedPrecondition l = Nothing
-      | otherwise = Just $ text name <+> format el <+> "=" <+> format l
+      kids = vcat actualLines
 
-formatRow name (ExpectedIsolated e r)
-  | failedPrecondition r = PP.empty
-  | otherwise
-  = vcat [ text name <+> format e <> ": model answer only."
-         , nest 2 $ "model answer =" <+> format r
-         ]
+      mkLine (el, l)
+        | failedPrecondition l = Nothing
+        | otherwise = Just $ format el <+> "=" <+> format l
 
-formatRow name (ActualIsolated e r)
-  = vcat [ text name <+> format e <> ": student only."
-         , nest 2 $ "student answer =" <+> format r
-         ]
+  format (ExpectedIsolated e r)
+    | failedPrecondition r = PP.empty
+    | otherwise
+    = vcat [ format e <> ": model answer only."
+           , nest 2 $ "model answer =" <+> format r
+           ]
+
+  format (ActualIsolated e r)
+    = vcat [ format e <> ": student only."
+           , nest 2 $ "student answer =" <+> format r
+           ]
