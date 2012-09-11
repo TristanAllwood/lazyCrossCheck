@@ -1,0 +1,22 @@
+LazyCrossCheck
+--------------
+
+A small, work in progress cross-checking library, for use in programming
+exercises to check student solutions against a model answer.
+
+Based on the ideas drawn out of Irulan[1], which was inspired by
+SmallCheck/LazySmallCheck[2].
+
+Have a look at Tester.hs for an example of usage.  Sample output:
+
+>runghc Tester.hs
+
+version (Just undefined): student's answer is more general.
+  student answer = 2
+  model answers:
+   version (Just 1) = 1
+   version (Just 2) = 2
+   version (Just 3) = 3
+
+[1] http://www.doc.ic.ac.uk/~tora/irulan/
+[2] http://www.cs.york.ac.uk/fp/smallcheck/
