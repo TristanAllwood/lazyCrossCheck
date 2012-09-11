@@ -1,19 +1,17 @@
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
+
 module LazyCrossCheck
 ( module LazyCrossCheck.Result
 , module LazyCrossCheck.Primitives
@@ -57,35 +55,65 @@ lcc name (LCCSpec exp act ps) = do
 
   let (ComparisonTable rows) = buildComparisonTable expOuts actOuts
 
-  forM_ rows (formatRow name)
+  forM_ rows $ \row -> do
+    let txt = PP.renderStyle (PP.style { lineLength = 72 }) (formatRow name row)
+    putStrLn txt
 
 
 formatRow :: String -> ComparisonRow -> Doc
 formatRow name (IdenticalExp e l r)
   | l ~~> r   = PP.empty
-  | otherwise = vcat [ text (name <+> format e <> ": results differ")
-                     , nest 2 $ vcat [ text $ "model answer:" <+> format l
-                                     , text $ "student:"      <+> format r
+  | otherwise = vcat [ text name <+> format e <> ": results differ."
+                     , nest 2 $ vcat [ "model answer:" <+> format l
+                                     , "student:"      <+> format r
                                      ]
                      ]
 formatRow name (ExpectedMoreGeneral e l rs)
   | failedPrecondition l = PP.empty
   | otherwise
-  = vcat [ text $ name <+> format e <> ": model answer is more general"
-         , nest 2 $ vcat $ [ text $ "model answer:" <+> format l
-                           , text $ "student answers:"
-                           , nest 1 kids
-                           ]
+  = vcat [ text name <+> format e <> ": model answer is more general."
+         , nest 2 $ vcat [ "model answer:" <+> format l
+                         , "student answers:"
+                         , nest 1 kids
+                         ]
        ]
   where
     kids = vcat (map formatRow' rs)
-    formatRow' (e', r) = text $ name <+> format e' ":" <+> format r
+    formatRow' (e', r) = text name <+> format e' <> ":" <+> format r
 
-formatRow name (ActualMoreGeneral ls e rs)
-  |
+formatRow name (ActualMoreGeneral ls e r)
+  | null actualLines = PP.empty
+  | otherwise
+  = vcat [ text name <+> format e <> ": student's answer is more general."
+         , nest 2 $ vcat [ "student answer:" <+> format r
+                         , "model answers:"
+                         , nest 1 kids
+                         ]
+         ]
+  where
+    actualLines = mapMaybe mkLine ls
+
+    kids = vcat actualLines
+
+    mkLine (el, l)
+      | failedPrecondition l = Nothing
+      | otherwise = Just $ text name <+> format el <> ":" <+> format l
+
+formatRow name (ExpectedIsolated e r)
+  | failedPrecondition r = PP.empty
+  | otherwise
+  = vcat [ text name <+> format e <> ": model answer only."
+         , nest 2 $ "model answer:" <+> format r
+         ]
+
+formatRow name (ActualIsolated e r)
+  = vcat [ text name <+> format e <> ": student only."
+         , nest 2 $ "student answer:" <+> format r
+         ]
 
 class Format a where
-  format :: a -> String
+  format :: a -> Doc
+
 
 data ComparisonTable
   = ComparisonTable [ComparisonRow]
@@ -223,11 +251,21 @@ data Exp
 instance Show Exp where
   show (Exp { arguments }) = show arguments
 
+instance Format Exp where
+  format (Exp { arguments }) = hsep (map format arguments)
+
 
 data Arg
   = forall a . (Typeable a, Data a) => ArgConstr (Proxy a) Constr [Arg]
   | forall a . (Typeable a, Data a) => ArgUndefined (Proxy a) Path
   | forall a . (Eq a, Show a, Typeable a) => ArgPrimitive a
+
+instance Format Arg where
+  format (ArgConstr _ c as)
+    | length as == 0  = text $ show c
+    | otherwise       = parens $ (hsep (text (show c):map format as))
+  format (ArgUndefined _ p) = text "undefined"
+  format (ArgPrimitive p)   = text $ show p
 
 instance Show Arg where
   show (ArgConstr _ c as)   = unwords [show c, show as]
@@ -248,6 +286,12 @@ data EvalResult
   | EvalUndefined Path
   | EvalException String
   deriving (Read, Show)
+
+instance Format EvalResult where
+  format (EvalSuccess str)      = text str
+  format (EvalUndefined path)   = "undefined"
+  format (EvalException string) = "Exception:" <+> text string
+
 
 eval :: Exp -> IO EvalResult
 eval exp = do
