@@ -2,9 +2,12 @@ module Tester where
 
 import LazyCrossCheck
 
+main :: IO ()
 main = test
 
-test = lazyCrossCheck "version" $ (version1 --> version2) `with` [ ints ==> [1,2,3] ]
+test :: IO ()
+test = lazyCrossCheck 5 "version" $
+        (version1 --> version2) `with` [ ints ==> [1,2,3] ]
 
 version1 :: Maybe Int -> Int
 version1 Nothing = 1

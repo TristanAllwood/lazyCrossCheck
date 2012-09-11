@@ -3,7 +3,6 @@
 {-# LANGUAGE GADTs #-}
 module LazyCrossCheck.Primitives where
 
-import Data.Maybe
 import Data.Typeable
 
 data Proxy a = Proxy

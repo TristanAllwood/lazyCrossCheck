@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-module NEList where
+module LazyCrossCheck.NEList where
 
 import Data.Typeable
 
