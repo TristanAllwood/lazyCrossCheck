@@ -5,7 +5,7 @@ name:                lazyCrossCheck
 version:             1.0.0.0
 synopsis:            A lazy crosstesting library.
 -- description:
-license:             MIT
+license:             BSD3
 license-file:        LICENSE
 author:              Dr. Tristan Oliver Richard Allwood
 maintainer:          tora@zonetora.co.uk
