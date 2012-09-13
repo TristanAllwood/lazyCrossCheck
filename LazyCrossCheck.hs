@@ -6,11 +6,16 @@ module LazyCrossCheck
 ( module LazyCrossCheck.Result
 , module LazyCrossCheck.Primitives
 , (-->)
+, testGen
 , lazyCrossCheck
 , lazyCrossCheck2
+, lazyTestGeneration
+, lazyTestGeneration2
+, crossCheckFiles
 , with
 ) where
 
+import Control.Applicative
 import Control.Monad.State
 import Data.Data
 import Data.List
@@ -24,15 +29,22 @@ import LazyCrossCheck.Expressions
 import LazyCrossCheck.ComparisonTable
 import LazyCrossCheck.Utils
 
+crossCheckFiles :: FilePath -> FilePath -> IO ()
+crossCheckFiles expected actual = do
+  expectedOuts <- read <$> readFile expected
+  actualOuts   <- read <$> readFile actual
+  let ct = buildComparisonTable expectedOuts actualOuts
+  printCT ct
+
+ltg :: Int -> String -> LTGSpec n -> IO [(SimpleExp, EvalResult)]
+ltg depth name (LTGSpec exp ps) = do
+  outs <- explore depth ps (initialExp exp)
+  return $ map (\(e,r) -> (simplifyExpression name e, r)) outs
+
 lcc :: Int -> String -> LCCSpec n -> IO ()
 lcc depth name (LCCSpec exp act ps) = do
-  let expectedExp = initialExp exp
-  expOuts <- explore depth ps expectedExp
-  let simpleExpOuts = map (\(e,r) -> (simplifyExpression name e, r)) expOuts
-
-  let actualExp = initialExp act
-  actOuts <- explore depth ps actualExp
-  let simpleActOuts = map (\(e,r) -> (simplifyExpression name e, r)) actOuts
+  simpleExpOuts <- ltg depth name (LTGSpec exp ps)
+  simpleActOuts <- ltg depth name (LTGSpec act ps)
 
   let ct = buildComparisonTable simpleExpOuts simpleActOuts
   printCT ct
@@ -52,14 +64,31 @@ lazyCrossCheck = lcc
 lazyCrossCheck2 :: Int -> String -> LCCSpec Two -> IO ()
 lazyCrossCheck2 = lcc
 
+lazyTestGeneration :: Int -> String -> LTGSpec One
+                   -> IO [(SimpleExp, EvalResult)]
+lazyTestGeneration = ltg
+
+lazyTestGeneration2 :: Int -> String -> LTGSpec Two
+                    -> IO [(SimpleExp, EvalResult)]
+lazyTestGeneration2 = ltg
+
 (-->) :: forall a n . (CrossCheck (AddResult a n), Resultify a n) =>
          a -> a -> LCCSpec n
 l --> r = LCCSpec (addResult l (undefined :: n))
                   (addResult r (undefined :: n)) []
 
-with :: LCCSpec n -> [ Primitives ] -> LCCSpec n
-with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
+testGen :: forall a n . (CrossCheck (AddResult a n), Resultify a n) =>
+           a -> LTGSpec n
+testGen e = LTGSpec (addResult e (undefined :: n)) []
 
+class With a where
+  with :: a n -> [ Primitives ] -> a n
+
+instance With LCCSpec where
+  with (LCCSpec l r ps) ps' = LCCSpec l r (ps ++ ps')
+
+instance With LTGSpec where
+  with (LTGSpec e ps) ps' = LTGSpec e (ps ++ ps')
 
 instance (Typeable a, Data a, CrossCheck b) => CrossCheck (a -> b) where
   type Res (a -> b) = Res b

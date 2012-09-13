@@ -27,6 +27,9 @@ class (Eq (Res a), Show (Res a), Typeable (Res a)) => CrossCheck a where
 data LCCSpec n where
   LCCSpec :: CrossCheck a => a -> a -> [ Primitives ] -> LCCSpec n
 
+data LTGSpec n where
+  LTGSpec :: CrossCheck a => a -> [ Primitives ] -> LTGSpec n
+
 class Format a where
   format :: a -> Doc
 
